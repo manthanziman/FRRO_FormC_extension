@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json.schemastore.org/chrome-manifest.json",
+  "chromium:manifest_version": 3,
+  "firefox:manifest_version": 2,
+  "version": "1.0.0",
+  "firefox:browser_specific_settings": {
+    "gecko": {
+      "id": "{84d6ae2e-dddb-4d6b-becf-c4a001adcc8f}",
+      "data_collection_permissions": {
+        "required": [
+          "none"
+        ]
+      }
+    }
+  },
+  "name": "FRRO-FormC-extension",
+  "description": "Adds a sidebar panel to the browser with a simple page.",
+  "icons": {
+    "16": "images/icon-16.png",
+    "32": "images/icon-32.png",
+    "48": "images/icon-48.png",
+    "64": "images/icon-64.png",
+    "128": "images/icon-128.png"
+  },
+  "chromium:action": {
+    "default_icon": {
+      "16": "images/icon-16.png",
+      "32": "images/icon-32.png",
+      "48": "images/icon-48.png",
+      "64": "images/icon-64.png",
+      "128": "images/icon-128.png"
+    },
+    "default_title": "Open Side Panel"
+  },
+  "firefox:browser_action": {
+    "default_icon": {
+      "16": "images/icon-16.png",
+      "32": "images/icon-32.png",
+      "48": "images/icon-48.png",
+      "64": "images/icon-64.png",
+      "128": "images/icon-128.png"
+    },
+    "default_title": "Open Side Panel"
+  },
+  "chromium:side_panel": {
+    "default_path": "sidebar/index.html",
+    "default_title": "Side Panel Content"
+  },
+  "firefox:sidebar_action": {
+    "default_panel": "sidebar/index.html",
+    "default_title": "Side Panel Content",
+    "browser_style": false
+  },
+  "chromium:permissions": [
+    "sidePanel",
+    "tabs"
+  ],
+  "firefox:permissions": [
+    "tabs"
+  ],
+  "chromium:optional_host_permissions": [
+    "<all_urls>"
+  ],
+  "firefox:optional_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "chromium:service_worker": "background.js",
+    "firefox:scripts": [
+      "background.js"
+    ]
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content/scripts.jsx"
+      ]
+    }
+  ]
+}

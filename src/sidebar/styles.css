@@ -1,0 +1,132 @@
+:root {
+  color-scheme: light;
+  font-family: Arial, sans-serif;
+  background: #fff;
+  color: #000;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 16px;
+  background: #fff;
+  color: #000;
+}
+
+main {
+  display: grid;
+  gap: 16px;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+
+h1 {
+  font-size: 20px;
+}
+
+h2 {
+  font-size: 17px;
+}
+
+h3 {
+  font-size: 15px;
+}
+
+.booking-form,
+.guest-card,
+.result {
+  display: grid;
+  gap: 12px;
+}
+
+.guest-card,
+.result {
+  border: 1px solid #000;
+  padding: 12px;
+}
+
+label {
+  display: grid;
+  gap: 5px;
+}
+
+input,
+select,
+button {
+  min-height: 36px;
+  padding: 7px;
+  border: 1px solid #000;
+  border-radius: 0;
+  color: #000;
+  background: #fff;
+  font: inherit;
+}
+
+button,
+summary {
+  cursor: pointer;
+}
+
+button {
+  background: #ffe700;
+  font-weight: 700;
+}
+
+button:disabled {
+  cursor: wait;
+  opacity: 1;
+}
+
+details {
+  border: 1px solid #000;
+  padding: 10px;
+}
+
+summary {
+  font-weight: 700;
+}
+
+.manual-fields {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.radio-options {
+  display: grid;
+  gap: 6px;
+}
+
+.radio-options label {
+  display: flex;
+  align-items: center;
+}
+
+.radio-options input {
+  min-height: auto;
+  accent-color: #000;
+}
+
+.muted,
+small {
+  font-size: 12px;
+}
+
+.required-status,
+.message {
+  padding: 8px;
+  border: 1px solid #000;
+  background: #ffe700;
+}
+
+.result p {
+  overflow-wrap: anywhere;
+}
