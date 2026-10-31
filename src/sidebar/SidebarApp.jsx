@@ -1,7 +1,11 @@
 import { useMemo, useState } from "react";
 import { fieldMap } from "../autofill/fieldMap";
 import { transformers } from "../autofill/transformers";
-import { BOOKING_QUERY, createGraphqlClient, LOGIN_MUTATION } from "../graphql/client";
+import {
+  BOOKING_QUERY,
+  createGraphqlClient,
+  LOGIN_MUTATION,
+} from "../graphql/client";
 import "./styles.css";
 
 async function sendToActiveTab(message) {
@@ -59,7 +63,6 @@ function ManualInput({ field, value, options, onChange }) {
 }
 
 export default function SidebarApp() {
-  const [endpoint, setEndpoint] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [auth, setAuth] = useState(null);
@@ -99,15 +102,7 @@ export default function SidebarApp() {
     setManualValues({});
     setLoading(true);
     try {
-      const endpointUrl = new URL(endpoint);
-      if (!["http:", "https:"].includes(endpointUrl.protocol)) {
-        throw new Error("The GraphQL endpoint must use HTTP or HTTPS.");
-      }
-      const granted = await chrome.permissions.request({
-        origins: [`${endpointUrl.origin}/*`],
-      });
-      if (!granted) throw new Error("Host permission was not granted for the GraphQL endpoint.");
-      const client = createGraphqlClient(endpoint, auth.token);
+      const client = createGraphqlClient(auth.token);
       const { data } = await client.query({
         query: BOOKING_QUERY,
         variables: { reservationId },
@@ -131,15 +126,7 @@ export default function SidebarApp() {
     setBooking(null);
     setLoading(true);
     try {
-      const endpointUrl = new URL(endpoint);
-      if (!["http:", "https:"].includes(endpointUrl.protocol)) {
-        throw new Error("The GraphQL endpoint must use HTTP or HTTPS.");
-      }
-      const granted = await chrome.permissions.request({
-        origins: [`${endpointUrl.origin}/*`],
-      });
-      if (!granted) throw new Error("Host permission was not granted for the GraphQL endpoint.");
-      const client = createGraphqlClient(endpoint);
+      const client = createGraphqlClient();
       const { data } = await client.mutate({
         mutation: LOGIN_MUTATION,
         variables: { email, password },
@@ -251,19 +238,19 @@ export default function SidebarApp() {
 
   return (
     <main>
-      <h1>FRRO Form-C Autofill</h1>
+      <header className="app-header">
+        <div className="brand-mark" aria-hidden="true">FC</div>
+        <div className="brand-copy">
+          <p className="eyebrow">FRRO / FORM-C</p>
+          <h1>Form-C Autofill</h1>
+        </div>
+      </header>
       {!auth ? (
         <form className="booking-form" onSubmit={login}>
-          <label>
-            GraphQL endpoint
-            <input
-              type="url"
-              value={endpoint}
-              onChange={(event) => setEndpoint(event.target.value)}
-              placeholder="https://your-server/graphql"
-              required
-            />
-          </label>
+          <div className="section-heading">
+            <h2>Welcome back</h2>
+            <p>Sign in to find a reservation and autofill the Form-C.</p>
+          </div>
           <label>
             Email
             <input
@@ -290,9 +277,19 @@ export default function SidebarApp() {
         </form>
       ) : (
         <>
-          <p>Signed in as {auth.user.name} ({auth.user.role})</p>
-          <button type="button" onClick={logout}>Sign out</button>
+          <div className="account-bar">
+            <div className="account-copy">
+              <span className="eyebrow">SIGNED IN AS</span>
+              <strong>{auth.user.name}</strong>
+              <span className="muted">{auth.user.role}</span>
+            </div>
+            <button className="button-secondary" type="button" onClick={logout}>Sign out</button>
+          </div>
           <form className="booking-form" onSubmit={loadBooking}>
+            <div className="section-heading">
+              <h2>Find a booking</h2>
+              <p>Enter the reservation ID to load its guest details.</p>
+            </div>
             <label>
               Reservation ID
               <input
@@ -322,10 +319,21 @@ export default function SidebarApp() {
         const result = resultByGuest[guest.id];
         return (
           <article className="guest-card" key={guest.id}>
-            <h2>{[guest.firstName, guest.lastName].filter(Boolean).join(" ") || "Guest"}</h2>
-            <p className="muted">{guest.email}</p>
+            <div className="guest-heading">
+              <div className="guest-avatar" aria-hidden="true">
+                {guest.firstName?.charAt(0)?.toUpperCase() || "G"}
+              </div>
+              <div className="guest-identity">
+                <h2>{[guest.firstName, guest.lastName].filter(Boolean).join(" ") || "Guest"}</h2>
+                <p className="muted">{guest.email || "Guest details"}</p>
+              </div>
+            </div>
             {inspection && (
-              <p className="required-status">
+              <p
+                className={`required-status ${
+                  missing.length || unavailable.length ? "status-warning" : "status-success"
+                }`}
+              >
                 {missing.length
                   ? `${missing.length} required field${missing.length === 1 ? "" : "s"} missing: ${missing.join(", ")}`
                   : unavailable.length

@@ -2,18 +2,16 @@ import { ApolloClient, gql, HttpLink, InMemoryCache } from "@apollo/client";
 import { SetContextLink } from "@apollo/client/link/context";
 import { getAuthHeaders } from "../config.js";
 
-export function createGraphqlClient(endpoint, token) {
-  if (!endpoint) {
-    throw new Error("Enter the GraphQL endpoint URL.");
-  }
+export const GRAPHQL_ENDPOINT = "http://localhost:4000/graphql";
 
+export function createGraphqlClient(token) {
   const authLink = new SetContextLink((previousContext) => ({
     headers: {
       ...previousContext.headers,
       ...getAuthHeaders(token),
     },
   }));
-  const httpLink = new HttpLink({ uri: endpoint });
+  const httpLink = new HttpLink({ uri: GRAPHQL_ENDPOINT });
 
   return new ApolloClient({
     link: authLink.concat(httpLink),

@@ -55,8 +55,12 @@
     "sidePanel",
     "tabs"
   ],
+  "chromium:host_permissions": [
+    "http://localhost:4000/*"
+  ],
   "firefox:permissions": [
-    "tabs"
+    "tabs",
+    "http://localhost:4000/*"
   ],
   "chromium:optional_host_permissions": [
     "<all_urls>"
