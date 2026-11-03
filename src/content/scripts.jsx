@@ -29,11 +29,38 @@ function labelTexts(control) {
         (node) => node.innerText || node.textContent || "",
       ),
     );
+    if (row.tagName === "TR") {
+      const cells = [...row.querySelectorAll(":scope > th, :scope > td")];
+      const controlCell = control.closest("th, td");
+      const controlCellIndex = cells.indexOf(controlCell);
+      if (controlCellIndex > 0) {
+        texts.push(...cells.slice(0, controlCellIndex).map((cell) => cell.innerText || cell.textContent || ""));
+      }
+      if (controlCell) {
+        const range = document.createRange();
+        range.selectNodeContents(controlCell);
+        range.setEndBefore(control);
+        texts.push(range.toString());
+      }
+    }
   }
   return texts.map(normalize).filter(Boolean);
 }
 
 function sectionFor(control) {
+  const row = control.closest("tr");
+  let previousRow = row?.previousElementSibling;
+  while (previousRow) {
+    if (previousRow.tagName === "TR") {
+      const cells = [...previousRow.querySelectorAll(":scope > th, :scope > td")];
+      const isSectionHeader = cells.length === 1 || cells.some((cell) => cell.colSpan > 1);
+      if (isSectionHeader) {
+        return normalize(previousRow.innerText || previousRow.textContent);
+      }
+    }
+    previousRow = previousRow.previousElementSibling;
+  }
+
   const fieldset = control.closest("fieldset");
   const legend = fieldset?.querySelector("legend");
   if (legend) return normalize(legend.innerText || legend.textContent);
@@ -64,7 +91,10 @@ function controlMatches(field, control, used, checkSection = true) {
     return false;
   }
 
-  return !checkSection || !field.section || sectionFor(control) === normalize(field.section);
+  if (!checkSection || !field.section) return true;
+  const section = sectionFor(control);
+  const expectedSection = normalize(field.section);
+  return !section || section === expectedSection || section.includes(expectedSection);
 }
 
 function findControl(field, used = new Set()) {

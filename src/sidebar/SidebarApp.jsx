@@ -1,10 +1,13 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { fieldMap } from "../autofill/fieldMap";
 import { transformers } from "../autofill/transformers";
 import {
   BOOKING_QUERY,
   createGraphqlClient,
   LOGIN_MUTATION,
+  LOGOUT_MUTATION,
+  ME_QUERY,
+  isAuthenticationError,
 } from "../graphql/client";
 import "./styles.css";
 
@@ -72,13 +75,93 @@ export default function SidebarApp() {
   const [inspection, setInspection] = useState(null);
   const [resultByGuest, setResultByGuest] = useState({});
   const [error, setError] = useState("");
+  const [sessionMessage, setSessionMessage] = useState("");
   const [pageError, setPageError] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const wasAuthenticated = useRef(false);
+  const sessionMessageRef = useRef("");
+  const sessionRefreshVersion = useRef(0);
+
+  function clearSessionData(message = "") {
+    setAuth(null);
+    setReservationId("");
+    setBooking(null);
+    setManualValues({});
+    setInspection(null);
+    setResultByGuest({});
+    setError("");
+    setSessionMessage(message);
+    sessionMessageRef.current = message;
+    wasAuthenticated.current = false;
+  }
+
+  function handleAuthLost() {
+    if (!wasAuthenticated.current && sessionMessageRef.current) return;
+    const message = wasAuthenticated.current
+      ? "Your session has expired or you have been signed out. Please sign in again."
+      : "Authentication is required. Please sign in to continue.";
+    clearSessionData(message);
+  }
 
   const manualFields = useMemo(
     () => fieldMap.filter((field) => field.source.kind === "manual"),
     [],
   );
+
+  useEffect(() => {
+    let active = true;
+    let sessionRefreshInFlight = false;
+
+    async function refreshSession(showLoading = false) {
+      if (sessionRefreshInFlight) return;
+      sessionRefreshInFlight = true;
+      const currentVersion = ++sessionRefreshVersion.current;
+      try {
+        const { data } = await createGraphqlClient().query({
+          query: ME_QUERY,
+          fetchPolicy: "no-cache",
+        });
+        if (!active || currentVersion !== sessionRefreshVersion.current) return;
+        if (data?.me) {
+          wasAuthenticated.current = true;
+          setAuth({ user: data.me });
+          setError("");
+          setSessionMessage("");
+          sessionMessageRef.current = "";
+        } else {
+          handleAuthLost();
+        }
+      } catch (requestError) {
+        if (!active || currentVersion !== sessionRefreshVersion.current) return;
+        if (isAuthenticationError(requestError)) {
+          handleAuthLost();
+        } else {
+          setError(requestError.message || "Could not restore the session.");
+        }
+      } finally {
+        sessionRefreshInFlight = false;
+        if (showLoading && active && currentVersion === sessionRefreshVersion.current) setLoading(false);
+      }
+    }
+
+    const handleVisibilityChange = () => {
+      if (!document.hidden) void refreshSession();
+    };
+    const sessionCheck = window.setInterval(() => {
+      if (!document.hidden) void refreshSession();
+    }, 30_000);
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("focus", handleVisibilityChange);
+    void refreshSession(true);
+
+    return () => {
+      active = false;
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("focus", handleVisibilityChange);
+      window.clearInterval(sessionCheck);
+    };
+  }, []);
 
   async function inspectPage() {
     setPageError("");
@@ -102,7 +185,7 @@ export default function SidebarApp() {
     setManualValues({});
     setLoading(true);
     try {
-      const client = createGraphqlClient(auth.token);
+      const client = createGraphqlClient();
       const { data } = await client.query({
         query: BOOKING_QUERY,
         variables: { reservationId },
@@ -114,7 +197,11 @@ export default function SidebarApp() {
       setBooking(data.bookingByReservationId);
       await inspectPage();
     } catch (requestError) {
-      setError(requestError.message || "Could not load the booking.");
+      if (isAuthenticationError(requestError)) {
+        handleAuthLost();
+      } else {
+        setError(requestError.message || "Could not load the booking.");
+      }
     } finally {
       setLoading(false);
     }
@@ -122,9 +209,12 @@ export default function SidebarApp() {
 
   async function login(event) {
     event.preventDefault();
+    sessionRefreshVersion.current += 1;
     setError("");
     setBooking(null);
     setLoading(true);
+    setSessionMessage("");
+    sessionMessageRef.current = "";
     try {
       const client = createGraphqlClient();
       const { data } = await client.mutate({
@@ -132,10 +222,16 @@ export default function SidebarApp() {
         variables: { email, password },
       });
       const loginResult = data?.loginAdmin;
-      if (!loginResult?.token || !loginResult.user) {
+      if (!loginResult?.user) {
         throw new Error("The server returned an incomplete login response.");
       }
-      setAuth({ token: loginResult.token, user: loginResult.user });
+      sessionRefreshVersion.current += 1;
+      wasAuthenticated.current = true;
+      setAuth({ user: loginResult.user });
+      setBooking(null);
+      setManualValues({});
+      setInspection(null);
+      setResultByGuest({});
       setPassword("");
     } catch (requestError) {
       setError(requestError.message || "Could not log in.");
@@ -144,15 +240,28 @@ export default function SidebarApp() {
     }
   }
 
-  function logout() {
-    setAuth(null);
-    setEmail("");
-    setPassword("");
-    setBooking(null);
-    setManualValues({});
-    setInspection(null);
-    setResultByGuest({});
+  async function logout() {
+    sessionRefreshVersion.current += 1;
     setError("");
+    setLoading(true);
+    try {
+      const client = createGraphqlClient();
+      const { data } = await client.mutate({ mutation: LOGOUT_MUTATION });
+      if (!data?.logout) throw new Error("The server could not end the session.");
+
+      sessionRefreshVersion.current += 1;
+      clearSessionData();
+      setEmail("");
+      setPassword("");
+    } catch (requestError) {
+      if (isAuthenticationError(requestError)) {
+        handleAuthLost();
+      } else {
+        setError(requestError.message || "Could not log out.");
+      }
+    } finally {
+      setLoading(false);
+    }
   }
 
   function updateManualValue(guestId, fieldId, value) {
@@ -272,7 +381,7 @@ export default function SidebarApp() {
             />
           </label>
           <button type="submit" disabled={loading}>
-            {loading ? "Signing in…" : "Sign in"}
+            {loading ? "Please wait…" : "Sign in"}
           </button>
         </form>
       ) : (
@@ -306,6 +415,7 @@ export default function SidebarApp() {
       )}
 
       {error && <p className="message" role="alert">{error}</p>}
+      {sessionMessage && <p className="message" role="alert">{sessionMessage}</p>}
       {pageError && (
         <p className="message" role="status">
           {pageError} Reload the Form-C tab and try again.

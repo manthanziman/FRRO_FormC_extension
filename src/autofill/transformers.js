@@ -37,6 +37,17 @@ export function matchFormOption(value, context = {}) {
   return match ? match.value : null;
 }
 
+function matchOptionContaining(value, context, aliases = {}) {
+  const exact = matchFormOption(value, context);
+  if (exact !== null) return exact;
+
+  const candidates = aliases[normalize(value)] ?? [normalize(value)];
+  const option = (context.options ?? []).find((candidate) =>
+    candidates.some((alias) => normalize(candidate.label).includes(alias)),
+  );
+  return option?.value ?? null;
+}
+
 export function transformGender(value, context) {
   const aliases = { m: "male", f: "female", o: "other" };
   const normalized = normalize(value);
@@ -44,11 +55,35 @@ export function transformGender(value, context) {
 }
 
 export function transformCountry(value, context) {
-  return matchFormOption(value, context);
+  const aliases = {
+    american: "united states",
+    british: "united kingdom",
+    french: "france",
+    german: "germany",
+    japanese: "japan",
+    russian: "russia",
+    spanish: "spain",
+  };
+  return matchFormOption(aliases[normalize(value)] ?? value, context);
 }
 
 export function transformLocation(value, context) {
   return matchFormOption(value, context);
+}
+
+export function transformVisaType(value, context) {
+  const aliases = {
+    tourist: ["tourist"],
+    tourism: ["tourist", "tourism"],
+    business: ["business"],
+    medical: ["medical"],
+  };
+  return matchOptionContaining(value, context, aliases);
+}
+
+export function transformPurpose(value, context) {
+  const aliases = { tourism: ["tourism", "tourist"] };
+  return matchOptionContaining(value, context, aliases);
 }
 
 export function uppercase(value) {
@@ -60,5 +95,7 @@ export const transformers = {
   gender: transformGender,
   country: transformCountry,
   location: transformLocation,
+  visaType: transformVisaType,
+  purpose: transformPurpose,
   uppercase,
 };
