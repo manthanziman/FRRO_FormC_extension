@@ -3,12 +3,15 @@ import { fieldMap } from "../autofill/fieldMap";
 import { transformers } from "../autofill/transformers";
 import {
   BOOKING_QUERY,
-  createGraphqlClient,
-  LOGIN_MUTATION,
+  client,
   LOGOUT_MUTATION,
   ME_QUERY,
   isAuthenticationError,
+  isForbiddenError,
+  onForbidden,
 } from "../graphql/client";
+import { GO_ORIGIN } from "../config.js";
+import { useAuth, useIdle } from "./useExtensionState.js";
 import "./styles.css";
 
 async function sendToActiveTab(message) {
@@ -66,41 +69,32 @@ function ManualInput({ field, value, options, onChange }) {
 }
 
 export default function SidebarApp() {
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [auth, setAuth] = useState(null);
+  const isAuthenticated = useAuth();
+  const isIdle = useIdle();
+  const [panelVisible, setPanelVisible] = useState(() => !document.hidden);
+  const [user, setUser] = useState(null);
   const [reservationId, setReservationId] = useState("");
   const [booking, setBooking] = useState(null);
   const [manualValues, setManualValues] = useState({});
   const [inspection, setInspection] = useState(null);
   const [resultByGuest, setResultByGuest] = useState({});
   const [error, setError] = useState("");
-  const [sessionMessage, setSessionMessage] = useState("");
   const [pageError, setPageError] = useState("");
-  const [loading, setLoading] = useState(true);
-  const wasAuthenticated = useRef(false);
-  const sessionMessageRef = useRef("");
-  const sessionRefreshVersion = useRef(0);
+  const [loading, setLoading] = useState(false);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [forbidden, setForbidden] = useState(false);
+  const requestVersion = useRef(0);
+  const bookingAbortController = useRef(null);
 
-  function clearSessionData(message = "") {
-    setAuth(null);
-    setReservationId("");
+  function clearGuestData(clearReservation = true) {
+    if (clearReservation) setReservationId("");
     setBooking(null);
     setManualValues({});
     setInspection(null);
     setResultByGuest({});
     setError("");
-    setSessionMessage(message);
-    sessionMessageRef.current = message;
-    wasAuthenticated.current = false;
-  }
-
-  function handleAuthLost() {
-    if (!wasAuthenticated.current && sessionMessageRef.current) return;
-    const message = wasAuthenticated.current
-      ? "Your session has expired or you have been signed out. Please sign in again."
-      : "Authentication is required. Please sign in to continue.";
-    clearSessionData(message);
+    setPageError("");
+    setLoading(false);
   }
 
   const manualFields = useMemo(
@@ -109,59 +103,109 @@ export default function SidebarApp() {
   );
 
   useEffect(() => {
-    let active = true;
-    let sessionRefreshInFlight = false;
+    return onForbidden(() => setForbidden(true));
+  }, []);
 
-    async function refreshSession(showLoading = false) {
-      if (sessionRefreshInFlight) return;
-      sessionRefreshInFlight = true;
-      const currentVersion = ++sessionRefreshVersion.current;
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      const visible = !document.hidden;
+      setPanelVisible(visible);
+      if (!visible) return;
+
+      setAuthLoading(true);
+      setUser(null);
+      clearGuestData(false);
+      void client.clearStore().catch(() => {
+        setError("Could not clear private session data before reopening the panel.");
+      });
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }, []);
+
+  useEffect(() => {
+    if (isAuthenticated !== false) return;
+    requestVersion.current += 1;
+    bookingAbortController.current?.abort();
+    bookingAbortController.current = null;
+    setUser(null);
+    setForbidden(false);
+    clearGuestData();
+    void client.clearStore().catch(() => {
+      setError("Could not clear private session data. Close and reopen the side panel.");
+    });
+  }, [isAuthenticated]);
+
+  useEffect(() => {
+    if (isIdle !== true) return;
+    requestVersion.current += 1;
+    bookingAbortController.current?.abort();
+    bookingAbortController.current = null;
+    setUser(null);
+    setForbidden(false);
+    clearGuestData(false);
+    setAuthLoading(true);
+    void client.clearStore().catch(() => {
+      setError("Could not clear private session data while idle.");
+    });
+  }, [isIdle]);
+
+  useEffect(() => {
+    if (isAuthenticated !== true || isIdle !== false || !panelVisible) {
+      if (isAuthenticated !== true || isIdle !== false) setAuthLoading(false);
+      return undefined;
+    }
+
+    let active = true;
+    const abortController = new AbortController();
+
+    async function validateSession() {
+      setAuthLoading(true);
+      setError("");
+      setForbidden(false);
       try {
-        const { data } = await createGraphqlClient().query({
+        const { data } = await client.query({
           query: ME_QUERY,
-          fetchPolicy: "no-cache",
+          fetchPolicy: "network-only",
+          context: { fetchOptions: { signal: abortController.signal } },
         });
-        if (!active || currentVersion !== sessionRefreshVersion.current) return;
-        if (data?.me) {
-          wasAuthenticated.current = true;
-          setAuth({ user: data.me });
-          setError("");
-          setSessionMessage("");
-          sessionMessageRef.current = "";
-        } else {
-          handleAuthLost();
+        if (!active) return;
+        if (!data?.me) throw new Error("The server returned no current user.");
+        setUser(data.me);
+
+        if (reservationId) {
+          const bookingResult = await client.query({
+            query: BOOKING_QUERY,
+            variables: { reservationId },
+            fetchPolicy: "network-only",
+            context: { fetchOptions: { signal: abortController.signal } },
+          });
+          if (!active) return;
+          if (!bookingResult.data?.bookingByReservationId) {
+            throw new Error("No booking was returned for that reservation ID.");
+          }
+          setBooking(bookingResult.data.bookingByReservationId);
         }
       } catch (requestError) {
-        if (!active || currentVersion !== sessionRefreshVersion.current) return;
-        if (isAuthenticationError(requestError)) {
-          handleAuthLost();
-        } else {
+        if (!active) return;
+        if (abortController.signal.aborted) return;
+        if (isForbiddenError(requestError)) setForbidden(true);
+        else if (!isAuthenticationError(requestError)) {
           setError(requestError.message || "Could not restore the session.");
         }
       } finally {
-        sessionRefreshInFlight = false;
-        if (showLoading && active && currentVersion === sessionRefreshVersion.current) setLoading(false);
+        if (active) setAuthLoading(false);
       }
     }
 
-    const handleVisibilityChange = () => {
-      if (!document.hidden) void refreshSession();
-    };
-    const sessionCheck = window.setInterval(() => {
-      if (!document.hidden) void refreshSession();
-    }, 30_000);
-
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-    window.addEventListener("focus", handleVisibilityChange);
-    void refreshSession(true);
+    void validateSession();
 
     return () => {
       active = false;
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-      window.removeEventListener("focus", handleVisibilityChange);
-      window.clearInterval(sessionCheck);
+      abortController.abort();
     };
-  }, []);
+  }, [isAuthenticated, isIdle, panelVisible]);
 
   async function inspectPage() {
     setPageError("");
@@ -178,89 +222,68 @@ export default function SidebarApp() {
 
   async function loadBooking(event) {
     event.preventDefault();
+    if (isAuthenticated !== true || isIdle) return;
+    const currentRequestVersion = requestVersion.current;
+    const abortController = new AbortController();
+    bookingAbortController.current?.abort();
+    bookingAbortController.current = abortController;
     setError("");
+    setForbidden(false);
     setBooking(null);
     setInspection(null);
     setResultByGuest({});
     setManualValues({});
     setLoading(true);
     try {
-      const client = createGraphqlClient();
       const { data } = await client.query({
         query: BOOKING_QUERY,
         variables: { reservationId },
-        fetchPolicy: "no-cache",
+        fetchPolicy: "network-only",
+        context: { fetchOptions: { signal: abortController.signal } },
       });
+      if (currentRequestVersion !== requestVersion.current) return;
       if (!data?.bookingByReservationId) {
         throw new Error("No booking was returned for that reservation ID.");
       }
       setBooking(data.bookingByReservationId);
       await inspectPage();
     } catch (requestError) {
-      if (isAuthenticationError(requestError)) {
-        handleAuthLost();
-      } else {
+      if (abortController.signal.aborted) return;
+      if (isForbiddenError(requestError)) setForbidden(true);
+      else if (!isAuthenticationError(requestError)) {
         setError(requestError.message || "Could not load the booking.");
       }
     } finally {
-      setLoading(false);
-    }
-  }
-
-  async function login(event) {
-    event.preventDefault();
-    sessionRefreshVersion.current += 1;
-    setError("");
-    setBooking(null);
-    setLoading(true);
-    setSessionMessage("");
-    sessionMessageRef.current = "";
-    try {
-      const client = createGraphqlClient();
-      const { data } = await client.mutate({
-        mutation: LOGIN_MUTATION,
-        variables: { email, password },
-      });
-      const loginResult = data?.loginAdmin;
-      if (!loginResult?.user) {
-        throw new Error("The server returned an incomplete login response.");
+      if (bookingAbortController.current === abortController) {
+        bookingAbortController.current = null;
+        setLoading(false);
       }
-      sessionRefreshVersion.current += 1;
-      wasAuthenticated.current = true;
-      setAuth({ user: loginResult.user });
-      setBooking(null);
-      setManualValues({});
-      setInspection(null);
-      setResultByGuest({});
-      setPassword("");
-    } catch (requestError) {
-      setError(requestError.message || "Could not log in.");
-    } finally {
-      setLoading(false);
     }
   }
 
   async function logout() {
-    sessionRefreshVersion.current += 1;
     setError("");
     setLoading(true);
     try {
-      const client = createGraphqlClient();
       const { data } = await client.mutate({ mutation: LOGOUT_MUTATION });
       if (!data?.logout) throw new Error("The server could not end the session.");
 
-      sessionRefreshVersion.current += 1;
-      clearSessionData();
-      setEmail("");
-      setPassword("");
+      await chrome.storage.session.set({ isAuthenticated: false });
     } catch (requestError) {
-      if (isAuthenticationError(requestError)) {
-        handleAuthLost();
-      } else {
+      if (isForbiddenError(requestError)) setForbidden(true);
+      else if (!isAuthenticationError(requestError)) {
         setError(requestError.message || "Could not log out.");
       }
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function openGo() {
+    try {
+      await chrome.tabs.create({ url: GO_ORIGIN });
+    } catch {
+      setError("Could not open the GO dashboard.");
     }
   }
 
@@ -298,9 +321,11 @@ export default function SidebarApp() {
   }
 
   async function fillGuest(guest) {
+    if (isAuthenticated !== true || isIdle) return;
+    const currentRequestVersion = requestVersion.current;
     setError("");
     const formDetails = await inspectPage();
-    if (!formDetails) return;
+    if (!formDetails || currentRequestVersion !== requestVersion.current) return;
 
     const manual = manualValues[guest.id] ?? {};
     const pending = [];
@@ -334,7 +359,9 @@ export default function SidebarApp() {
     }
 
     try {
+      if (currentRequestVersion !== requestVersion.current) return;
       const response = await sendToActiveTab({ type: "autofill", fields: pending });
+      if (currentRequestVersion !== requestVersion.current) return;
       if (!response?.ok) throw new Error("The Form-C page did not complete autofill.");
       setResultByGuest((current) => ({
         ...current,
@@ -354,43 +381,41 @@ export default function SidebarApp() {
           <h1>Form-C Autofill</h1>
         </div>
       </header>
-      {!auth ? (
-        <form className="booking-form" onSubmit={login}>
+      {isAuthenticated === null || isIdle === null ? (
+        <section className="booking-form" role="status">
+          Checking extension session…
+        </section>
+      ) : isIdle ? (
+        <section className="booking-form" role="status">
+          <h2>Session locked</h2>
+          <p>Guest details were cleared while this device was idle. Return to active use to continue.</p>
+        </section>
+      ) : isAuthenticated === false ? (
+        <section className="booking-form">
           <div className="section-heading">
-            <h2>Welcome back</h2>
-            <p>Sign in to find a reservation and autofill the Form-C.</p>
+            <h2>Please log in to GO</h2>
+            <p>Sign in to the GO dashboard to access Form-C bookings.</p>
           </div>
-          <label>
-            Email
-            <input
-              type="email"
-              autoComplete="username"
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-              required
-            />
-          </label>
-          <label>
-            Password
-            <input
-              type="password"
-              autoComplete="current-password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              required
-            />
-          </label>
-          <button type="submit" disabled={loading}>
-            {loading ? "Please wait…" : "Sign in"}
+          <button type="button" onClick={openGo}>
+            Open GO dashboard
           </button>
-        </form>
+        </section>
+      ) : authLoading ? (
+        <section className="booking-form" role="status">
+          Revalidating GO session…
+        </section>
+      ) : forbidden ? (
+        <section className="booking-form" role="alert">
+          <h2>No permission</h2>
+          <p>Your GO account does not have permission to access FRRO bookings.</p>
+        </section>
       ) : (
         <>
           <div className="account-bar">
             <div className="account-copy">
               <span className="eyebrow">SIGNED IN AS</span>
-              <strong>{auth.user.name}</strong>
-              <span className="muted">{auth.user.role}</span>
+              <strong>{user?.name}</strong>
+              <span className="muted">{user?.roles?.join(", ")}</span>
             </div>
             <button className="button-secondary" type="button" onClick={logout}>Sign out</button>
           </div>
@@ -415,14 +440,14 @@ export default function SidebarApp() {
       )}
 
       {error && <p className="message" role="alert">{error}</p>}
-      {sessionMessage && <p className="message" role="alert">{sessionMessage}</p>}
       {pageError && (
         <p className="message" role="status">
           {pageError} Reload the Form-C tab and try again.
         </p>
       )}
 
-      {auth && booking?.customers?.map((guest) => {
+      {isAuthenticated === true && isIdle === false && !authLoading && !forbidden &&
+        booking?.customers?.map((guest) => {
         const missing = missingRequired(guest);
         const unavailable = unavailableRequired();
         const guestManualValues = manualValues[guest.id] ?? {};

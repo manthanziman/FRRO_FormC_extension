@@ -7,60 +7,57 @@ import {
 } from "@apollo/client";
 import { onError } from "@apollo/client/link/error";
 import { CombinedGraphQLErrors, ServerError } from "@apollo/client/errors";
+import { API_ORIGIN } from "../config.js";
 
-// Set in .env.development / .env.production (see below)
-export const GRAPHQL_ENDPOINT = import.meta.env.EXTENSION_PUBLIC_API_URL;
+export const GRAPHQL_ENDPOINT = `${API_ORIGIN}/graphql`;
+const forbiddenListeners = new Set();
 
-if (!GRAPHQL_ENDPOINT) {
-  throw new Error("EXTENSION_PUBLIC_API_URL is not set");
-}
-
-// ---- Auth-lost notifications -------------------------------------------
-// The UI subscribes with onAuthLost(() => showLoginScreen())
-const authLostListeners = new Set();
-
-export function onAuthLost(listener) {
-  authLostListeners.add(listener);
-  return () => authLostListeners.delete(listener);
+export function onForbidden(listener) {
+  forbiddenListeners.add(listener);
+  return () => forbiddenListeners.delete(listener);
 }
 
 export function isAuthenticationError(error) {
   if (CombinedGraphQLErrors.is(error)) {
-    return error.errors.some((graphqlError) =>
-      graphqlError.extensions?.code === "UNAUTHENTICATED" ||
-      graphqlError.message === "Authentication required",
+    return error.errors.some(
+      (graphqlError) => graphqlError.extensions?.code === "UNAUTHENTICATED",
     );
   }
   return ServerError.is(error) && error.statusCode === 401;
 }
 
+export function isForbiddenError(error) {
+  if (CombinedGraphQLErrors.is(error)) {
+    return error.errors.some(
+      (graphqlError) => graphqlError.extensions?.code === "FORBIDDEN",
+    );
+  }
+  return ServerError.is(error) && error.statusCode === 403;
+}
+
 // ---- Links ---------------------------------------------------------------
 const errorLink = onError(({ error }) => {
   if (isAuthenticationError(error)) {
-    // Wipe cached data (including passport/visa PII) and tell the UI
-    client.clearStore().catch((error) => {
-      console.error("Could not clear the GraphQL cache after authentication was lost.", error);
+    void chrome.storage.session.set({ isAuthenticated: false }).catch(() => {
+      console.error("Could not update authentication state after a 401 response.");
     });
-    authLostListeners.forEach((fn) => fn());
+  } else if (isForbiddenError(error)) {
+    forbiddenListeners.forEach((listener) => listener());
   }
 });
 
 const httpLink = new HttpLink({
   uri: GRAPHQL_ENDPOINT,
   credentials: "include",
-  headers: { "X-Requested-By": "frro-extension" } // basic CSRF guard, validate on server
+  headers: { "X-GO-Client": "go-frro-extension" },
 });
 
-// ---- Client ----------------------------------------------------------------
-// no-cache: never serve login state or customer data from memory,
-// always ask the server. This fixes "still logged in until I reopen".
 export const client = new ApolloClient({
   link: from([errorLink, httpLink]),
   cache: new InMemoryCache(),
   defaultOptions: {
-    query: { fetchPolicy: "no-cache" },
-    watchQuery: { fetchPolicy: "no-cache" },
-    mutate: { fetchPolicy: "no-cache" }
+    query: { fetchPolicy: "network-only" },
+    watchQuery: { fetchPolicy: "network-only" },
   }
 });
 
@@ -71,17 +68,9 @@ export function createGraphqlClient() {
 }
 
 // ---- Operations ----------------------------------------------------------------
-export const LOGIN_MUTATION = gql`
-  mutation LoginAdmin($email: String!, $password: String!) {
-    loginAdmin(email: $email, password: $password) {
-      user { id name email role }
-    }
-  }
-`;
-
 export const ME_QUERY = gql`
   query Me {
-    me { id name email role }
+    me { id name roles }
   }
 `;
 

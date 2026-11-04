@@ -25,9 +25,10 @@
     "default_path": "sidebar/index.html",
     "default_title": "FRRO Form C"
   },
-  "permissions": ["sidePanel", "storage", "cookies"],
+  "permissions": ["sidePanel", "storage", "cookies", "idle"],
   "host_permissions": [
-    "http://localhost:4000/*"
+    "$EXTENSION_PUBLIC_API_ORIGIN/*",
+    "$EXTENSION_PUBLIC_GO_ORIGIN/*"
   ],
   "background": {
     "service_worker": "background.js"
